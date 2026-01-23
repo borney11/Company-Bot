@@ -13,37 +13,50 @@ load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD")
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")  # platform-level admin secret
 
 openai.api_key = OPENROUTER_API_KEY
 openai.api_base = "https://openrouter.ai/api/v1"
 
-# ------------------ PATHS ------------------
-UPLOAD_DIR = "data/uploads"
-INDEX_DIR = "data/faiss_index_final"
-INDEX_FILE = os.path.join(INDEX_DIR, "index.faiss")
+# ------------------ STREAMLIT ------------------
+st.set_page_config(page_title="Company AI Assistant")
+
+# ------------------ CLIENT IDENTIFICATION ------------------
+query_params = st.experimental_get_query_params()
+CLIENT_ID = query_params.get("client", [None])[0]
+
+if not CLIENT_ID:
+    st.error("Client not specified.")
+    st.stop()
+
+# ------------------ PATHS (ISOLATED PER CLIENT) ------------------
+BASE_DIR = f"data/clients/{CLIENT_ID}"
+UPLOAD_DIR = f"{BASE_DIR}/uploads"
+INDEX_DIR = f"{BASE_DIR}/faiss"
+TRAINED_FLAG = f"{BASE_DIR}/trained.flag"
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(INDEX_DIR, exist_ok=True)
 
-# ------------------ STREAMLIT ------------------
-st.set_page_config(page_title="Company AI Assistant")
-
-# ------------------ SESSION STATE ------------------
+# ------------------ SESSION STATE (CHAT ONLY) ------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-if "trained" not in st.session_state:
-    st.session_state.trained = False  # 🔒 HARD TRAINING FLAG
+# ------------------ ADMIN MODE (HIDDEN) ------------------
+is_admin = False
+admin_query = query_params.get("admin", [None])[0]
+
+if admin_query == "1":
+    admin_input = st.sidebar.text_input("Admin token", type="password")
+    if admin_input == ADMIN_TOKEN:
+        is_admin = True
+        st.sidebar.success("Admin mode enabled")
 
 # ------------------ ADMIN INGEST ------------------
-st.sidebar.title("")
-admin_input = st.sidebar.text_input("Admin access", type="password")
-
-if admin_input == ADMIN_PASSWORD:
-    st.sidebar.success("Admin mode enabled")
-
-    uploaded_file = st.sidebar.file_uploader("Upload company PDF", type=["pdf"])
+if is_admin:
+    uploaded_file = st.sidebar.file_uploader(
+        "Upload company PDF", type=["pdf"]
+    )
 
     if uploaded_file:
         pdf_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
@@ -51,9 +64,7 @@ if admin_input == ADMIN_PASSWORD:
             f.write(uploaded_file.getbuffer())
 
         reader = PdfReader(pdf_path)
-        text = "".join(
-            page.extract_text() or "" for page in reader.pages
-        )
+        text = "".join(page.extract_text() or "" for page in reader.pages)
 
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
@@ -64,11 +75,14 @@ if admin_input == ADMIN_PASSWORD:
         embeddings = HuggingFaceEmbeddings(
             model_name="all-MiniLM-L6-v2"
         )
+
         db = FAISS.from_texts(chunks, embeddings)
         db.save_local(INDEX_DIR)
 
-        st.session_state.trained = True  # ✅ SET FLAG
-        st.sidebar.success("Document indexed successfully")
+        with open(TRAINED_FLAG, "w") as f:
+            f.write("trained")
+
+        st.sidebar.success("Client knowledge indexed")
 
 # ------------------ UI ------------------
 st.title("Company AI Assistant")
@@ -79,7 +93,7 @@ for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ------------------ INPUT ------------------
+# ------------------ CHAT INPUT ------------------
 question = st.chat_input("Ask a question…")
 
 if question:
@@ -89,8 +103,8 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    # 🔒 ABSOLUTE GUARD
-    if not st.session_state.trained:
+    # GLOBAL GUARD
+    if not os.path.exists(TRAINED_FLAG):
         answer = "The assistant has not been trained on any documents yet."
         st.session_state.messages.append(
             {"role": "assistant", "content": answer}
@@ -99,7 +113,9 @@ if question:
             st.markdown(answer)
         st.stop()
 
-    embeddings = HuggingFaceEmbeddings(model_name="all-MiniLM-L6-v2")
+    embeddings = HuggingFaceEmbeddings(
+        model_name="all-MiniLM-L6-v2"
+    )
     db = FAISS.load_local(INDEX_DIR, embeddings)
 
     docs = db.similarity_search(question, k=2)
@@ -132,17 +148,9 @@ Answer:
                 {"role": "user", "content": prompt}
             ],
             temperature=0,
-            headers={
-                "HTTP-Referer": "http://localhost",
-                "X-Title": "Company RAG Bot"
-            }
         )
 
-        raw_answer = response["choices"][0]["message"]["content"]
-
-        # 🔧 NORMALIZE BULLETS
-        answer = raw_answer.replace("•", "-")
-
+        answer = response["choices"][0]["message"]["content"].replace("•", "-")
         thinking.markdown(answer)
 
     st.session_state.messages.append(
