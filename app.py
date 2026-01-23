@@ -99,9 +99,13 @@ if question:
 
     prompt = f"""
 You are a company AI assistant.
-Answer ONLY using the context below.
-If the answer is not found, say:
-"I don’t have this information in the provided documents."
+
+Rules:
+- Answer ONLY using the context below.
+- If the answer is not found, say exactly:
+  "I don’t have this information in the provided documents."
+- If the answer contains multiple items, format them as a bullet list using hyphens (-).
+- If the answer is a single statement, write it as one sentence.
 
 Context:
 {context}
@@ -111,6 +115,7 @@ Question:
 
 Answer:
 """
+
 
     response = openai.ChatCompletion.create(
         model=MODEL_NAME,
@@ -126,4 +131,6 @@ Answer:
     )
 
     st.subheader("Answer")
-    st.write(response["choices"][0]["message"]["content"])
+    st.markdown(response["choices"][0]["message"]["content"])
+
+
