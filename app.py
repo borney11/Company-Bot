@@ -30,14 +30,14 @@ openai.api_base = "https://openrouter.ai/api/v1"
 st.set_page_config(page_title="Company AI Assistant")
 
 UPLOAD_DIR = "data/uploads"
-INDEX_DIR = "data/faiss_index"
+INDEX_DIR = "data/faiss_index_v2"   # versioned to avoid old cache
 INDEX_FILE = os.path.join(INDEX_DIR, "index.faiss")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(INDEX_DIR, exist_ok=True)
 
 # --------------------------------------------------
-# Session state for chat history
+# Session state (DO NOT RESET)
 # --------------------------------------------------
 if "messages" not in st.session_state:
     st.session_state.messages = []
@@ -63,14 +63,13 @@ if admin_input == ADMIN_PASSWORD:
 
         reader = PdfReader(pdf_path)
         text = ""
-
         for page in reader.pages:
             if page.extract_text():
                 text += page.extract_text()
 
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=600,
-            chunk_overlap=100
+            chunk_size=500,   # smaller = faster
+            chunk_overlap=80
         )
         chunks = splitter.split_text(text)
 
@@ -80,9 +79,6 @@ if admin_input == ADMIN_PASSWORD:
 
         db = FAISS.from_texts(chunks, embeddings)
         db.save_local(INDEX_DIR)
-
-        # Reset chat history after retraining
-        st.session_state.messages = []
 
         st.sidebar.success("Document indexed successfully")
 
@@ -112,7 +108,7 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    # HARD GUARD: block chat if no knowledge base
+    # HARD GUARD: no PDF → no answer
     if not os.path.exists(INDEX_FILE):
         answer = "The assistant has not been trained on any documents yet."
         st.session_state.messages.append(
@@ -127,19 +123,14 @@ if question:
     )
     db = FAISS.load_local(INDEX_DIR, embeddings)
 
-    # Faster retrieval
+    # FAST retrieval (k=2)
     docs = db.similarity_search(question, k=2)
     context = "\n\n".join([d.page_content for d in docs])
 
     prompt = f"""
-You are a company AI assistant.
-
-Rules:
-- Answer ONLY using the context below.
-- If the answer is not found, say exactly:
-  "I don’t have this information in the provided documents."
-- If multiple items exist, format as bullet points using hyphens (-).
-- If single information, answer in one sentence.
+Answer ONLY from the context.
+If not found, say:
+"I don’t have this information in the provided documents."
 
 Context:
 {context}
@@ -150,7 +141,7 @@ Question:
 Answer:
 """
 
-    # Assistant response with thinking indicator
+    # Assistant response
     with st.chat_message("assistant"):
         thinking = st.empty()
         thinking.markdown("_Thinking…_")
@@ -158,7 +149,7 @@ Answer:
         response = openai.ChatCompletion.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": "Strict document-based assistant"},
+                {"role": "system", "content": "Document-only assistant"},
                 {"role": "user", "content": prompt}
             ],
             temperature=0,
