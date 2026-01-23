@@ -8,28 +8,32 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.embeddings import HuggingFaceEmbeddings
 from langchain.vectorstores import FAISS
 
-# ------------------ ENV ------------------
+# ================== ENV ==================
 load_dotenv()
 
 OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
 MODEL_NAME = os.getenv("MODEL_NAME")
-ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")  # platform-level admin secret
+ADMIN_TOKEN = os.getenv("ADMIN_TOKEN")
+
+if not OPENROUTER_API_KEY or not MODEL_NAME or not ADMIN_TOKEN:
+    st.error("Server configuration missing.")
+    st.stop()
 
 openai.api_key = OPENROUTER_API_KEY
 openai.api_base = "https://openrouter.ai/api/v1"
 
-# ------------------ STREAMLIT ------------------
+# ================== STREAMLIT ==================
 st.set_page_config(page_title="Company AI Assistant")
 
-# ------------------ CLIENT IDENTIFICATION ------------------
+# ================== CLIENT IDENTIFICATION ==================
 query_params = st.experimental_get_query_params()
 CLIENT_ID = query_params.get("client", [None])[0]
 
 if not CLIENT_ID:
-    st.error("Client not specified.")
+    st.error("This assistant link is incomplete. Please contact the company.")
     st.stop()
 
-# ------------------ PATHS (ISOLATED PER CLIENT) ------------------
+# ================== PATHS (PER CLIENT) ==================
 BASE_DIR = f"data/clients/{CLIENT_ID}"
 UPLOAD_DIR = f"{BASE_DIR}/uploads"
 INDEX_DIR = f"{BASE_DIR}/faiss"
@@ -38,25 +42,25 @@ TRAINED_FLAG = f"{BASE_DIR}/trained.flag"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(INDEX_DIR, exist_ok=True)
 
-# ------------------ SESSION STATE (CHAT ONLY) ------------------
+# ================== SESSION STATE (CHAT ONLY) ==================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ------------------ ADMIN MODE (HIDDEN) ------------------
+# ================== ADMIN MODE (HIDDEN) ==================
 is_admin = False
-admin_query = query_params.get("admin", [None])[0]
+admin_mode = query_params.get("admin", [None])[0]
 
-if admin_query == "1":
-    admin_input = st.sidebar.text_input("Admin token", type="password")
+if admin_mode == "1":
+    admin_input = st.sidebar.text_input("Admin access", type="password")
     if admin_input == ADMIN_TOKEN:
         is_admin = True
         st.sidebar.success("Admin mode enabled")
+    elif admin_input:
+        st.sidebar.error("Invalid admin token")
 
-# ------------------ ADMIN INGEST ------------------
+# ================== ADMIN PDF INGEST ==================
 if is_admin:
-    uploaded_file = st.sidebar.file_uploader(
-        "Upload company PDF", type=["pdf"]
-    )
+    uploaded_file = st.sidebar.file_uploader("Upload company PDF", type=["pdf"])
 
     if uploaded_file:
         pdf_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
@@ -82,18 +86,18 @@ if is_admin:
         with open(TRAINED_FLAG, "w") as f:
             f.write("trained")
 
-        st.sidebar.success("Client knowledge indexed")
+        st.sidebar.success("Client knowledge indexed successfully")
 
-# ------------------ UI ------------------
+# ================== UI ==================
 st.title("Company AI Assistant")
 st.caption("Ask questions about the company")
 
-# ------------------ CHAT HISTORY ------------------
+# ================== CHAT HISTORY ==================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ------------------ CHAT INPUT ------------------
+# ================== CHAT INPUT ==================
 question = st.chat_input("Ask a question…")
 
 if question:
@@ -103,7 +107,7 @@ if question:
     with st.chat_message("user"):
         st.markdown(question)
 
-    # GLOBAL GUARD
+    # ===== GLOBAL HARD GUARD =====
     if not os.path.exists(TRAINED_FLAG):
         answer = "The assistant has not been trained on any documents yet."
         st.session_state.messages.append(
