@@ -31,6 +31,7 @@ st.set_page_config(page_title="Company AI Assistant")
 
 UPLOAD_DIR = "data/uploads"
 INDEX_DIR = "data/faiss_index"
+INDEX_FILE = os.path.join(INDEX_DIR, "index.faiss")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(INDEX_DIR, exist_ok=True)
@@ -42,7 +43,7 @@ if "messages" not in st.session_state:
     st.session_state.messages = []
 
 # --------------------------------------------------
-# ADMIN INGEST (PASSWORD PROTECTED – BACKEND)
+# ADMIN INGEST (PASSWORD PROTECTED)
 # --------------------------------------------------
 st.sidebar.title("")
 admin_input = st.sidebar.text_input("Admin access", type="password")
@@ -68,7 +69,7 @@ if admin_input == ADMIN_PASSWORD:
                 text += page.extract_text()
 
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=600,      # optimized for speed
+            chunk_size=600,
             chunk_overlap=100
         )
         chunks = splitter.split_text(text)
@@ -79,6 +80,9 @@ if admin_input == ADMIN_PASSWORD:
 
         db = FAISS.from_texts(chunks, embeddings)
         db.save_local(INDEX_DIR)
+
+        # Reset chat history after retraining
+        st.session_state.messages = []
 
         st.sidebar.success("Document indexed successfully")
 
@@ -96,21 +100,21 @@ for msg in st.session_state.messages:
         st.markdown(msg["content"])
 
 # --------------------------------------------------
-# Chat input (fixed at bottom)
+# Chat input
 # --------------------------------------------------
 question = st.chat_input("Ask a question…")
 
 if question:
-    # Show user message
+    # User message
     st.session_state.messages.append(
         {"role": "user", "content": question}
     )
     with st.chat_message("user"):
         st.markdown(question)
 
-    # Check knowledge base
-    if not os.path.exists(os.path.join(INDEX_DIR, "index.faiss")):
-        answer = "The knowledge base is not ready yet."
+    # HARD GUARD: block chat if no knowledge base
+    if not os.path.exists(INDEX_FILE):
+        answer = "The assistant has not been trained on any documents yet."
         st.session_state.messages.append(
             {"role": "assistant", "content": answer}
         )
@@ -123,7 +127,7 @@ if question:
     )
     db = FAISS.load_local(INDEX_DIR, embeddings)
 
-    # Faster retrieval (k=2)
+    # Faster retrieval
     docs = db.similarity_search(question, k=2)
     context = "\n\n".join([d.page_content for d in docs])
 
@@ -146,7 +150,7 @@ Question:
 Answer:
 """
 
-    # Show thinking indicator
+    # Assistant response with thinking indicator
     with st.chat_message("assistant"):
         thinking = st.empty()
         thinking.markdown("_Thinking…_")
@@ -165,10 +169,8 @@ Answer:
         )
 
         answer = response["choices"][0]["message"]["content"]
-
         thinking.markdown(answer)
 
-    # Save assistant message
     st.session_state.messages.append(
         {"role": "assistant", "content": answer}
     )
