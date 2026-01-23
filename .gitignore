@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.pyc
+
+# Virtual environments
+myenv/
+venv/
+
+# Secrets
+.env
+
+# Data & indexes
+data/
+admin_pdfs/
+
+# OS junk
+.DS_Store

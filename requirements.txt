@@ -1,0 +1,7 @@
+openai==0.28.1
+langchain==0.0.352
+sentence-transformers
+faiss-cpu
+streamlit
+pypdf
+python-dotenv
