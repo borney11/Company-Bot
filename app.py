@@ -36,7 +36,13 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(INDEX_DIR, exist_ok=True)
 
 # --------------------------------------------------
-# ADMIN INGEST (BACKEND-LEVEL)
+# Session state for chat history
+# --------------------------------------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# --------------------------------------------------
+# ADMIN INGEST (PASSWORD PROTECTED – BACKEND)
 # --------------------------------------------------
 st.sidebar.title("")
 admin_input = st.sidebar.text_input("Admin access", type="password")
@@ -62,8 +68,8 @@ if admin_input == ADMIN_PASSWORD:
                 text += page.extract_text()
 
         splitter = RecursiveCharacterTextSplitter(
-            chunk_size=800,
-            chunk_overlap=150
+            chunk_size=600,      # optimized for speed
+            chunk_overlap=100
         )
         chunks = splitter.split_text(text)
 
@@ -77,24 +83,48 @@ if admin_input == ADMIN_PASSWORD:
         st.sidebar.success("Document indexed successfully")
 
 # --------------------------------------------------
-# USER CHAT UI (CHAT-ONLY)
+# MAIN UI
 # --------------------------------------------------
 st.title("Company AI Assistant")
 st.caption("Ask questions about the company")
 
-question = st.text_input("Ask a question")
+# --------------------------------------------------
+# Display chat history
+# --------------------------------------------------
+for msg in st.session_state.messages:
+    with st.chat_message(msg["role"]):
+        st.markdown(msg["content"])
+
+# --------------------------------------------------
+# Chat input (fixed at bottom)
+# --------------------------------------------------
+question = st.chat_input("Ask a question…")
 
 if question:
+    # Show user message
+    st.session_state.messages.append(
+        {"role": "user", "content": question}
+    )
+    with st.chat_message("user"):
+        st.markdown(question)
+
+    # Check knowledge base
     if not os.path.exists(os.path.join(INDEX_DIR, "index.faiss")):
-        st.error("Knowledge base not ready.")
+        answer = "The knowledge base is not ready yet."
+        st.session_state.messages.append(
+            {"role": "assistant", "content": answer}
+        )
+        with st.chat_message("assistant"):
+            st.markdown(answer)
         st.stop()
 
     embeddings = HuggingFaceEmbeddings(
         model_name="all-MiniLM-L6-v2"
     )
     db = FAISS.load_local(INDEX_DIR, embeddings)
-    docs = db.similarity_search(question, k=4)
 
+    # Faster retrieval (k=2)
+    docs = db.similarity_search(question, k=2)
     context = "\n\n".join([d.page_content for d in docs])
 
     prompt = f"""
@@ -104,8 +134,8 @@ Rules:
 - Answer ONLY using the context below.
 - If the answer is not found, say exactly:
   "I don’t have this information in the provided documents."
-- If the answer contains multiple items, format them as a bullet list using hyphens (-).
-- If the answer is a single statement, write it as one sentence.
+- If multiple items exist, format as bullet points using hyphens (-).
+- If single information, answer in one sentence.
 
 Context:
 {context}
@@ -116,21 +146,29 @@ Question:
 Answer:
 """
 
+    # Show thinking indicator
+    with st.chat_message("assistant"):
+        thinking = st.empty()
+        thinking.markdown("_Thinking…_")
 
-    response = openai.ChatCompletion.create(
-        model=MODEL_NAME,
-        messages=[
-            {"role": "system", "content": "Strict document-based assistant"},
-            {"role": "user", "content": prompt}
-        ],
-        temperature=0,
-        headers={
-            "HTTP-Referer": "http://localhost",
-            "X-Title": "Company RAG Bot"
-        }
+        response = openai.ChatCompletion.create(
+            model=MODEL_NAME,
+            messages=[
+                {"role": "system", "content": "Strict document-based assistant"},
+                {"role": "user", "content": prompt}
+            ],
+            temperature=0,
+            headers={
+                "HTTP-Referer": "http://localhost",
+                "X-Title": "Company RAG Bot"
+            }
+        )
+
+        answer = response["choices"][0]["message"]["content"]
+
+        thinking.markdown(answer)
+
+    # Save assistant message
+    st.session_state.messages.append(
+        {"role": "assistant", "content": answer}
     )
-
-    st.subheader("Answer")
-    st.markdown(response["choices"][0]["message"]["content"])
-
-
