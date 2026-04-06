@@ -26,8 +26,8 @@ openai.api_base = "https://openrouter.ai/api/v1"
 st.set_page_config(page_title="Company AI Assistant")
 
 # ================= CLIENT IDENTIFICATION =================
-query_params = st.experimental_get_query_params()
-CLIENT_ID = query_params.get("client", [None])[0]
+query_params = st.query_params
+CLIENT_ID = query_params.get("client", None)
 
 if not CLIENT_ID:
     st.error("This assistant link is incomplete. Please contact the company.")
