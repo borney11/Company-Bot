@@ -48,7 +48,7 @@ if "messages" not in st.session_state:
 
 # ================= ADMIN MODE (HIDDEN FROM USERS) =================
 is_admin = False
-admin_mode = query_params.get("admin", [None])[0]
+admin_mode = query_params.get("admin")
 
 if admin_mode == "1":
     admin_input = st.sidebar.text_input("Admin access", type="password")
