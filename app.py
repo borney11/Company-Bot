@@ -22,18 +22,19 @@ if not OPENROUTER_API_KEY or not MODEL_NAME or not ADMIN_TOKEN:
 openai.api_key = OPENROUTER_API_KEY
 openai.api_base = "https://openrouter.ai/api/v1"
 
-# ================= STREAMLIT =================
+# ================= PAGE =================
 st.set_page_config(page_title="Company AI Assistant")
 
-# ================= CLIENT IDENTIFICATION =================
+# ================= QUERY PARAMS =================
 query_params = st.query_params
-CLIENT_ID = query_params.get("client", None)
+CLIENT_ID = query_params.get("client")
+ADMIN_MODE = query_params.get("admin")
 
 if not CLIENT_ID:
-    st.error("This assistant link is incomplete. Please contact the company.")
+    st.error("Invalid access link. Missing client ID.")
     st.stop()
 
-# ================= PATHS (PER CLIENT, ISOLATED) =================
+# ================= PATHS =================
 BASE_DIR = f"data/clients/{CLIENT_ID}"
 UPLOAD_DIR = f"{BASE_DIR}/uploads"
 INDEX_DIR = f"{BASE_DIR}/faiss"
@@ -42,95 +43,106 @@ TRAINED_FLAG = f"{BASE_DIR}/trained.flag"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(INDEX_DIR, exist_ok=True)
 
-# ================= SESSION STATE (CHAT ONLY) =================
+# ================= SESSION =================
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
-# ================= ADMIN MODE (HIDDEN FROM USERS) =================
+# ================= ADMIN AUTH =================
 is_admin = False
-admin_mode = query_params.get("admin")
 
-if admin_mode == "1":
-    admin_input = st.sidebar.text_input("Admin access", type="password")
+if ADMIN_MODE == "1":
+    admin_input = st.sidebar.text_input("Enter Admin Password", type="password")
+
     if admin_input == ADMIN_TOKEN:
         is_admin = True
         st.sidebar.success("Admin mode enabled")
     elif admin_input:
-        st.sidebar.error("Invalid admin token")
+        st.sidebar.error("Wrong password")
 
-# ================= EMBEDDINGS (STREAMLIT SAFE) =================
+# ================= EMBEDDINGS =================
 embeddings = OpenAIEmbeddings(
     model="text-embedding-3-small",
     openai_api_key=OPENROUTER_API_KEY,
     openai_api_base="https://openrouter.ai/api/v1"
 )
 
-# ================= ADMIN PDF INGEST =================
+# ================= ADMIN PANEL =================
 if is_admin:
-    uploaded_file = st.sidebar.file_uploader("Upload company PDF", type=["pdf"])
+    st.sidebar.header("📂 Admin Panel")
+
+    uploaded_file = st.sidebar.file_uploader("Upload PDF", type=["pdf"])
 
     if uploaded_file:
         pdf_path = os.path.join(UPLOAD_DIR, uploaded_file.name)
+
+        # Save file
         with open(pdf_path, "wb") as f:
             f.write(uploaded_file.getbuffer())
 
+        # Read PDF
         reader = PdfReader(pdf_path)
         text = "".join(page.extract_text() or "" for page in reader.pages)
 
+        # Split text
         splitter = RecursiveCharacterTextSplitter(
             chunk_size=500,
             chunk_overlap=80
         )
         chunks = splitter.split_text(text)
 
-        db = FAISS.from_texts(chunks, embeddings)
+        # FIX: append instead of overwrite
+        if os.path.exists(os.path.join(INDEX_DIR, "index.faiss")):
+            db = FAISS.load_local(INDEX_DIR, embeddings)
+            db.add_texts(chunks)
+        else:
+            db = FAISS.from_texts(chunks, embeddings)
+
         db.save_local(INDEX_DIR)
 
+        # mark trained
         with open(TRAINED_FLAG, "w") as f:
             f.write("trained")
 
-        st.sidebar.success("Client knowledge indexed successfully")
+        st.sidebar.success("PDF added to knowledge base")
 
 # ================= UI =================
 st.title("Company AI Assistant")
-st.caption("Ask questions about the company")
+st.caption(f"Client: {CLIENT_ID}")
 
 # ================= CHAT HISTORY =================
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-# ================= CHAT INPUT =================
-question = st.chat_input("Ask a question…")
+# ================= CHAT =================
+question = st.chat_input("Ask a question...")
 
 if question:
-    # user message
-    st.session_state.messages.append(
-        {"role": "user", "content": question}
-    )
+    st.session_state.messages.append({"role": "user", "content": question})
+
     with st.chat_message("user"):
         st.markdown(question)
 
-    # hard global guard
+    # Check training
     if not os.path.exists(TRAINED_FLAG):
-        answer = "The assistant has not been trained on any documents yet."
-        st.session_state.messages.append(
-            {"role": "assistant", "content": answer}
-        )
+        answer = "No documents uploaded yet."
+        st.session_state.messages.append({"role": "assistant", "content": answer})
+
         with st.chat_message("assistant"):
             st.markdown(answer)
+
         st.stop()
 
+    # Load DB
     db = FAISS.load_local(INDEX_DIR, embeddings)
-    docs = db.similarity_search(question, k=2)
+
+    docs = db.similarity_search(question, k=3)
     context = "\n\n".join(d.page_content for d in docs)
 
     prompt = f"""
-Answer ONLY using the context.
-If the answer is not found, say:
-"I don’t have this information in the provided documents."
-
-If multiple items exist, format as markdown bullets using '-'.
+Answer ONLY using the context below.
+If answer is not found, say:
+"I don’t have this information in the documents."
 
 Context:
 {context}
@@ -143,20 +155,18 @@ Answer:
 
     with st.chat_message("assistant"):
         thinking = st.empty()
-        thinking.markdown("_Thinking…_")
+        thinking.markdown("Thinking...")
 
         response = openai.ChatCompletion.create(
             model=MODEL_NAME,
             messages=[
-                {"role": "system", "content": "Strict document-only assistant"},
+                {"role": "system", "content": "Strict document-based assistant"},
                 {"role": "user", "content": prompt}
             ],
             temperature=0,
         )
 
-        answer = response["choices"][0]["message"]["content"].replace("•", "-")
+        answer = response["choices"][0]["message"]["content"]
         thinking.markdown(answer)
 
-    st.session_state.messages.append(
-        {"role": "assistant", "content": answer}
-    )
+    st.session_state.messages.append({"role": "assistant", "content": answer})
